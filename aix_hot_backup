@@ -1,0 +1,116 @@
+#!/bin/sh
+# $Header: hot_database_backup.sh,v 2.1 2011/6/02 13:51:42 $
+#
+#according to PROD's $ORACLE_HOME
+#use "echo $ORACLE_HOME" to see it 
+ORACLE_HOME=/oracle/app/product/db10g
+export ORACLE_HOME
+
+#according to PROD's $ORACLE_SID
+#use "echo $ORACLE_SID" to see it
+ORACLE_SID=orcl2
+export ORACLE_SID
+
+#according to PROD's FTP SERVER'S IP
+#ask your system administrator  
+REMOTE_IP=
+RUSER=
+RPASS=
+REMORTE_HOME=
+BACKUP_HOME=/rman/orcl
+ORACLE_USER=oracle
+
+# ---------------------------------------------------------------------------
+# Determine the user which is executing this script.
+# ---------------------------------------------------------------------------
+CUSER=`id |cut -d"(" -f2 | cut -d ")" -f1`
+ 
+# ---------------------------------------------------------------------------
+# Put output in <this file name>.out. Change as desired.
+# Note: output directory requires write permission.
+# ---------------------------------------------------------------------------
+
+RMAN_LOG_FILE=`pwd`/${0}.out
+curr_date=`date +%Y%m%d%H%M%S`
+# ---------------------------------------------------------------------------
+# You may want to delete the output file so that backup information does
+# not accumulate.  If not, delete the following lines.
+# ---------------------------------------------------------------------------
+
+if [ -f "$RMAN_LOG_FILE" ]
+then
+	rm -f "$RMAN_LOG_FILE"
+fi
+
+# -----------------------------------------------------------------
+# Initialize the log file.
+# -----------------------------------------------------------------
+ 
+echo >> $RMAN_LOG_FILE
+chmod 666 $RMAN_LOG_FILE
+ 
+# ---------------------------------------------------------------------------
+# Log the start of this script.
+# ---------------------------------------------------------------------------
+ 
+echo Script $0 >> $RMAN_LOG_FILE
+echo ==== started on `date` ==== >> $RMAN_LOG_FILE
+echo >> $RMAN_LOG_FILE
+ 
+
+TARGET_CONNECT_STR=/
+ 
+RMAN=$ORACLE_HOME/bin/rman
+
+CMD_STR="
+ORACLE_HOME=$ORACLE_HOME
+export ORACLE_HOME
+ORACLE_SID=$ORACLE_SID
+export ORACLE_SID
+$RMAN target / nocatalog msglog $RMAN_LOG_FILE append << EOF
+delete noprompt archivelog until time 'sysdate-4';
+delete noprompt backupset completed before 'sysdate-1' tag='FULLDB';
+//delete noprompt backupset completed before 'sysdate-1';
+backup database filesperset=3 format '$BACKUP_HOME/FULL_${ORACLE_SID}_${curr_date}_%t' tag='FULLDB';
+sql 'alter system archive log current';
+backup archivelog all filesperset=10 format '$BACKUP_HOME/ARCH_${ORACLE_SID}_${curr_date}_%t' tag='ARCHIVELOG';
+copy current controlfile to '$BACKUP_HOME/controlfile_${ORACLE_SID}_${curr_date}';
+delete noprompt archivelog until time 'sysdate-3';
+EOF
+"
+# Initiate the command string
+ 
+if [ "$CUSER" = "root" ]
+then
+    su - $ORACLE_USER -c "$CMD_STR" >> $RMAN_LOG_FILE
+    RSTAT=$?
+else
+    /bin/sh -c "$CMD_STR" >> $RMAN_LOG_FILE
+    RSTAT=$?
+fi
+# ---------------------------------------------------------------------------
+# Log the completion of this script.
+# ---------------------------------------------------------------------------
+echo "$RSTAT=RSTAT" 
+if [ $RSTAT = 0 ]
+then
+    FTPID=0 
+    LOGMSG="ended successfully"
+else
+    FTPID=1 
+    LOGMSG="ended in error"
+fi
+ 
+echo >> $RMAN_LOG_FILE
+echo Script $0 >> $RMAN_LOG_FILE
+echo ==== $LOGMSG on `date` ==== >> $RMAN_LOG_FILE
+echo >> $RMAN_LOG_FILE
+    ftp -n $REMOTE_IP << ! 
+    user $RUSER $RPASS
+    prompt
+    binary
+    cd $REMORTE_HOME
+    lcd $BACKUP_HOME
+    mput *${curr_date}*
+    bye
+    ! 
